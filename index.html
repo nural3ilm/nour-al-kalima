@@ -337,7 +337,6 @@ function goSub(){ go('sub'); }
 // ─── SEARCH ───────────────────────────────────────────────
 function qs(w){ document.getElementById('sinput').value=w; doSearch(); }
 
-// Supprime les diacritiques pour la comparaison
 function stripDia(s){ return s.replace(/[\u064B-\u065F\u0670]/g,''); }
 
 async function doSearch(){
@@ -353,70 +352,34 @@ async function doSearch(){
   const key = Object.keys(DB).find(k => stripDia(k).includes(rawStripped) || rawStripped.includes(stripDia(k)));
   if(key){ renderResult(DB[key]); return; }
 
-  // 2. API alquran.cloud — recherche dans tout le Coran
-  try{
-    const searchRes = await fetch(`https://api.alquran.cloud/v1/search/${encodeURIComponent(raw)}/all/ar`);
-    const searchData = await searchRes.json();
-
-    if(searchData.data && searchData.data.matches && searchData.data.matches.length > 0){
-      const match = searchData.data.matches[0];
-      const surahN = match.surah.number;
-      const ayahN  = match.numberInSurah;
-
-      // Récupère l'ayah en arabe + traduction française
-      const [arRes, frRes] = await Promise.all([
-        fetch(`https://api.alquran.cloud/v1/ayah/${surahN}:${ayahN}/ar.alafasy`),
-        fetch(`https://api.alquran.cloud/v1/ayah/${surahN}:${ayahN}/fr.hamidullah`)
-      ]);
-      const arData = await arRes.json();
-      const frData = await frRes.json();
-
-      // Appel Claude pour signification + phonétique + grammaire
-      const claudeRes = await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          model:'claude-sonnet-4-20250514', max_tokens:400,
-          system:`Expert arabe coranique. Réponds UNIQUEMENT avec JSON valide sans backticks, avec ces clés: ar (mot vocalisé), ph (phonétique latin), mAr (signification courte en arabe), mFr (signification courte en français), gram (racine + analyse courte).`,
-          messages:[{role:'user', content:`Donne les infos pour le mot coranique: ${raw}`}]
-        })
-      });
-      const claudeData = await claudeRes.json();
-      const claudeObj  = JSON.parse(claudeData.content[0].text.trim());
-
-      const result = {
-        ar:   claudeObj.ar || raw,
-        ph:   claudeObj.ph || '',
-        mAr:  claudeObj.mAr || '',
-        mFr:  claudeObj.mFr || '',
-        sAr:  match.surah.name,
-        sFr:  `${match.surah.englishName} (${surahN})`,
-        v:    String(ayahN),
-        aAr:  arData.data ? arData.data.text : match.text,
-        aFr:  frData.data ? frData.data.text : '',
-        gram: claudeObj.gram || '',
-        audio:`ar.alafasy/${surahN}${String(ayahN).padStart(3,'0')}`
-      };
-      renderResult(result);
-      return;
-    }
-  } catch(e){ console.log('API alquran error:', e); }
-
-  // 3. Fallback Claude seul
+  // 2. Claude AI — tous les mots coraniques
   try{
     const res = await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
-        model:'claude-sonnet-4-20250514', max_tokens:600,
-        system:`Expert Coran et langue arabe. Réponds UNIQUEMENT avec un objet JSON valide (sans backticks) avec exactement ces clés: ar,ph,mAr,mFr,sAr,sFr,v,aAr,aFr,gram. Si le mot n'est pas dans le Coran, mets "Mot non coranique" dans mFr.`,
-        messages:[{role:'user', content:`Mot coranique à analyser: ${raw}`}]
+        model:'claude-sonnet-4-20250514', max_tokens:700,
+        system:`Tu es un expert en langue arabe et en Coran. Pour chaque mot coranique donné, réponds UNIQUEMENT avec un objet JSON valide (sans backticks, sans commentaires, sans texte avant ou après) avec exactement ces clés:
+- ar: le mot avec voyelles (تشكيل)
+- ph: prononciation en alphabet latin (ex: kalima)
+- mAr: signification courte en arabe (max 10 mots)
+- mFr: signification courte en français (max 10 mots)
+- sAr: nom de la sourate en arabe où ce mot apparaît
+- sFr: nom de la sourate en français avec son numéro ex: Al-Baqara (2)
+- v: numéro du verset (chiffre uniquement)
+- aAr: texte complet de l'ayah en arabe
+- aFr: traduction française de l'ayah
+- gram: racine arabe + catégorie grammaticale + nombre d'occurrences dans le Coran
+Si le mot n'existe pas dans le Coran, mets "Mot non coranique" dans mFr et des tirets pour le reste.`,
+        messages:[{role:'user', content:`Mot coranique: ${raw}`}]
       })
     });
     const d = await res.json();
-    const obj = JSON.parse(d.content[0].text.trim());
+    const text = d.content[0].text.trim();
+    const obj = JSON.parse(text);
     obj.audio = null;
     renderResult(obj);
   } catch(e){
-    document.getElementById('rarea').innerHTML=`<div class="empty"><div class="empty-ar">؟</div><div class="empty-tx">Mot non trouvé dans le Coran<br/>تأكد من كتابة الكلمة بالعربية</div></div>`;
+    document.getElementById('rarea').innerHTML=`<div class="empty"><div class="empty-ar">؟</div><div class="empty-tx">Mot non trouvé<br/>تأكد من كتابة الكلمة بالعربية الصحيحة</div></div>`;
   }
 }
 
