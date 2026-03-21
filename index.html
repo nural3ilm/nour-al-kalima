@@ -343,36 +343,20 @@ async function doSearch(){
   const key = Object.keys(DB).find(k => stripDia(k).includes(rawStripped) || rawStripped.includes(stripDia(k)));
   if(key){ renderResult(DB[key]); return; }
 
-  // 2. api.quran.com + Claude AI en parallèle
+  // 2. api.quran.com — seule API compatible navigateur (pas de CORS)
   try{
-    // Lance les deux requêtes en même temps
-    const [searchRes, claudeRes] = await Promise.all([
-      fetch(`https://api.quran.com/api/v4/search?q=${encodeURIComponent(raw)}&language=fr&size=1`, { headers:{'Accept':'application/json'} }),
-      fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          model:'claude-sonnet-4-20250514', max_tokens:500,
-          system:`Expert arabe coranique. Réponds UNIQUEMENT avec JSON valide sans backticks avec ces clés: ar (mot vocalisé avec تشكيل), ph (phonétique latin), mAr (signification courte en arabe max 8 mots), mFr (signification courte en français max 8 mots), gram (racine + catégorie + occurrences).`,
-          messages:[{role:'user', content:`Mot coranique: ${raw}`}]
-        })
-      })
-    ]);
-
+    const searchRes = await fetch(
+      `https://api.quran.com/api/v4/search?q=${encodeURIComponent(raw)}&language=fr&size=1`,
+      { headers:{'Accept':'application/json'} }
+    );
     const searchData = await searchRes.json();
-    const claudeData = await claudeRes.json();
 
-    // Parse Claude
-    let claudeObj = {};
-    try{ claudeObj = JSON.parse(claudeData.content[0].text.trim()); }catch(e){}
-
-    // Si quran.com a trouvé le verset
     if(searchData.search && searchData.search.results && searchData.search.results.length > 0){
       const hit = searchData.search.results[0];
       const [surahNum, verseNum] = hit.verse_key.split(':');
 
-      // Récupère verset arabe + traduction française
       const [verseRes, surahRes] = await Promise.all([
-        fetch(`https://api.quran.com/api/v4/verses/by_key/${hit.verse_key}?language=fr&translations=136&fields=text_uthmani`, { headers:{'Accept':'application/json'} }),
+        fetch(`https://api.quran.com/api/v4/verses/by_key/${hit.verse_key}?language=fr&translations=136&fields=text_uthmani,text_imlaei_simple`, { headers:{'Accept':'application/json'} }),
         fetch(`https://api.quran.com/api/v4/chapters/${surahNum}?language=fr`, { headers:{'Accept':'application/json'} })
       ]);
       const verseData = await verseRes.json();
@@ -381,32 +365,53 @@ async function doSearch(){
       const surah = surahData.chapter;
       const translation = verse.translations && verse.translations[0] ? verse.translations[0].text.replace(/<[^>]+>/g,'') : '';
 
+      // Phonétique simple basée sur la translittération standard
+      const PHONETICS = {
+        'نور':'nūr','رحمة':'raḥma','صلاة':'ṣalāt','إيمان':'īmān','جنة':'janna',
+        'صبر':'ṣabr','تقوى':'taqwā','توبة':'tawba','كلمة':'kalima','علم':'ʿilm',
+        'حكمة':'ḥikma','قلب':'qalb','نفس':'nafs','حياة':'ḥayāt','دنيا':'dunyā',
+        'آخرة':'ākhira','فرقان':'furqān','كوثر':'kawthar','قرآن':'qurʾān','ذكر':'dhikr',
+        'الفرقان':'al-furqān','الكوثر':'al-kawthar','الله':'allāh','رسول':'rasūl',
+        'محمد':'muḥammad','عيسى':'ʿīsā','موسى':'mūsā','إبراهيم':'ibrāhīm',
+      };
+
+      const MEANINGS_FR = {
+        'نور':'Lumière','رحمة':'Miséricorde','صلاة':'Prière rituelle','إيمان':'Foi',
+        'جنة':'Paradis','صبر':'Patience','تقوى':'Piété','توبة':'Repentir',
+        'كلمة':'Mot, parole','علم':'Science, savoir','حكمة':'Sagesse','قلب':'Cœur',
+        'نفس':'Âme, soi','حياة':'Vie','دنيا':'Monde terrestre','آخرة':'Au-delà',
+        'فرقان':'Critère, discernement','الفرقان':'Le Critère','كوثر':'Abondance',
+        'الكوثر':'L\'Abondance','قرآن':'Coran','ذكر':'Rappel, mention',
+      };
+
+      const MEANINGS_AR = {
+        'نور':'الضوء والنور الإلهي','رحمة':'العطف والرأفة الإلهية','صلاة':'العبادة والصلة بالله',
+        'إيمان':'التصديق بالله وملائكته','جنة':'الفردوس دار النعيم','صبر':'التحمل والثبات',
+        'تقوى':'خشية الله ومراقبته','توبة':'الرجوع إلى الله','كلمة':'اللفظ والكلام',
+        'علم':'المعرفة والدراية','حكمة':'الفهم العميق والحكم','قلب':'العضو والروح',
+        'الفرقان':'ما يفرق بين الحق والباطل','الكوثر':'الخير الكثير ونهر في الجنة',
+      };
+
       renderResult({
-        ar:   claudeObj.ar  || raw,
-        ph:   claudeObj.ph  || '',
-        mAr:  claudeObj.mAr || '',
-        mFr:  claudeObj.mFr || '',
+        ar:   raw,
+        ph:   PHONETICS[rawStripped] || PHONETICS[raw] || '',
+        mAr:  MEANINGS_AR[rawStripped] || MEANINGS_AR[raw] || '',
+        mFr:  MEANINGS_FR[rawStripped] || MEANINGS_FR[raw] || 'Voir traduction du verset',
         sAr:  surah.name_arabic || '',
         sFr:  `${surah.translated_name ? surah.translated_name.name : surah.name_simple} (${surahNum})`,
         v:    verseNum,
         aAr:  verse.text_uthmani || hit.text,
         aFr:  translation,
-        gram: claudeObj.gram || `Sourate ${surahNum}, Verset ${verseNum}`,
+        gram: `Sourate n°${surahNum} · Verset ${verseNum}`,
         audio:`ar.alafasy/${surahNum}${String(verseNum).padStart(3,'0')}`
       });
-      return;
-    }
-
-    // quran.com n'a rien trouvé — utilise Claude seul
-    if(claudeObj.ar){
-      claudeObj.audio = null;
-      renderResult(claudeObj);
       return;
     }
 
     document.getElementById('rarea').innerHTML=`<div class="empty"><div class="empty-ar">؟</div><div class="empty-tx">Mot non trouvé dans le Coran<br/>تأكد من كتابة الكلمة بالعربية الصحيحة</div></div>`;
 
   } catch(e){
+    console.log('Erreur:', e);
     document.getElementById('rarea').innerHTML=`<div class="empty"><div class="empty-ar">؟</div><div class="empty-tx">Erreur de connexion<br/>تحقق من اتصالك بالإنترنت</div></div>`;
   }
 }
