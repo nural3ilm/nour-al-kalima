@@ -343,18 +343,32 @@ async function doSearch(){
   const key = Object.keys(DB).find(k => stripDia(k).includes(rawStripped) || rawStripped.includes(stripDia(k)));
   if(key){ renderResult(DB[key]); return; }
 
-  // 2. api.quran.com — tous les versets contenant le mot
+  // 2. api.quran.com — cherche la racine du mot pour toutes les formes
   try{
-    const searchRes = await fetch(
-      `https://api.quran.com/api/v4/search?q=${encodeURIComponent(raw)}&language=fr&size=20`,
-      { headers:{'Accept':'application/json'} }
-    );
-    const searchData = await searchRes.json();
+    // Cherche d'abord le mot exact, puis sa racine tronquée (3 lettres)
+    const rootSearch = rawStripped.length >= 3 ? rawStripped.substring(0,3) : rawStripped;
 
-    if(searchData.search && searchData.search.results && searchData.search.results.length > 0){
-      const results = searchData.search.results;
-      const total = searchData.search.total_results;
+    const [exactRes, rootRes] = await Promise.all([
+      fetch(`https://api.quran.com/api/v4/search?q=${encodeURIComponent(raw)}&language=fr&size=20`, { headers:{'Accept':'application/json'} }),
+      fetch(`https://api.quran.com/api/v4/search?q=${encodeURIComponent(rootSearch)}&language=fr&size=20`, { headers:{'Accept':'application/json'} })
+    ]);
 
+    const exactData = await exactRes.json();
+    const rootData  = await rootRes.json();
+
+    // Fusionne et déduplique les résultats
+    const exactResults = (exactData.search && exactData.search.results) ? exactData.search.results : [];
+    const rootResults  = (rootData.search  && rootData.search.results)  ? rootData.search.results  : [];
+
+    const seen = new Set();
+    const allResults = [...exactResults, ...rootResults].filter(r => {
+      if(seen.has(r.verse_key)) return false;
+      seen.add(r.verse_key); return true;
+    });
+
+    const total = exactData.search ? exactData.search.total_results : 0;
+
+    if(allResults.length > 0){
       const PHONETICS = {
         'نور':'nūr','رحمة':'raḥma','صلاة':'ṣalāt','إيمان':'īmān','جنة':'janna',
         'صبر':'ṣabr','تقوى':'taqwā','توبة':'tawba','كلمة':'kalima','علم':'ʿilm',
@@ -382,7 +396,7 @@ async function doSearch(){
       const mFr = MEANINGS_FR[rawStripped] || MEANINGS_FR[raw] || 'Voir traduction du verset';
       const mAr = MEANINGS_AR[rawStripped] || MEANINGS_AR[raw] || '';
 
-      renderAllResults(raw, ph, mFr, mAr, results, total);
+      renderAllResults(raw, ph, mFr, mAr, allResults, allResults.length);
       return;
     }
 
