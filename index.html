@@ -343,47 +343,33 @@ async function doSearch(){
   const key = Object.keys(DB).find(k => stripDia(k).includes(rawStripped) || rawStripped.includes(stripDia(k)));
   if(key){ renderResult(DB[key]); return; }
 
-  // 2. api.quran.com — seule API compatible navigateur (pas de CORS)
+  // 2. api.quran.com — tous les versets contenant le mot
   try{
     const searchRes = await fetch(
-      `https://api.quran.com/api/v4/search?q=${encodeURIComponent(raw)}&language=fr&size=1`,
+      `https://api.quran.com/api/v4/search?q=${encodeURIComponent(raw)}&language=fr&size=20`,
       { headers:{'Accept':'application/json'} }
     );
     const searchData = await searchRes.json();
 
     if(searchData.search && searchData.search.results && searchData.search.results.length > 0){
-      const hit = searchData.search.results[0];
-      const [surahNum, verseNum] = hit.verse_key.split(':');
+      const results = searchData.search.results;
+      const total = searchData.search.total_results;
 
-      const [verseRes, surahRes] = await Promise.all([
-        fetch(`https://api.quran.com/api/v4/verses/by_key/${hit.verse_key}?language=fr&translations=136&fields=text_uthmani,text_imlaei_simple`, { headers:{'Accept':'application/json'} }),
-        fetch(`https://api.quran.com/api/v4/chapters/${surahNum}?language=fr`, { headers:{'Accept':'application/json'} })
-      ]);
-      const verseData = await verseRes.json();
-      const surahData = await surahRes.json();
-      const verse = verseData.verse;
-      const surah = surahData.chapter;
-      const translation = verse.translations && verse.translations[0] ? verse.translations[0].text.replace(/<[^>]+>/g,'') : '';
-
-      // Phonétique simple basée sur la translittération standard
       const PHONETICS = {
         'نور':'nūr','رحمة':'raḥma','صلاة':'ṣalāt','إيمان':'īmān','جنة':'janna',
         'صبر':'ṣabr','تقوى':'taqwā','توبة':'tawba','كلمة':'kalima','علم':'ʿilm',
         'حكمة':'ḥikma','قلب':'qalb','نفس':'nafs','حياة':'ḥayāt','دنيا':'dunyā',
         'آخرة':'ākhira','فرقان':'furqān','كوثر':'kawthar','قرآن':'qurʾān','ذكر':'dhikr',
         'الفرقان':'al-furqān','الكوثر':'al-kawthar','الله':'allāh','رسول':'rasūl',
-        'محمد':'muḥammad','عيسى':'ʿīsā','موسى':'mūsā','إبراهيم':'ibrāhīm',
       };
-
       const MEANINGS_FR = {
         'نور':'Lumière','رحمة':'Miséricorde','صلاة':'Prière rituelle','إيمان':'Foi',
         'جنة':'Paradis','صبر':'Patience','تقوى':'Piété','توبة':'Repentir',
         'كلمة':'Mot, parole','علم':'Science, savoir','حكمة':'Sagesse','قلب':'Cœur',
         'نفس':'Âme, soi','حياة':'Vie','دنيا':'Monde terrestre','آخرة':'Au-delà',
-        'فرقان':'Critère, discernement','الفرقان':'Le Critère','كوثر':'Abondance',
-        'الكوثر':'L\'Abondance','قرآن':'Coran','ذكر':'Rappel, mention',
+        'فرقان':'Critère','الفرقان':'Le Critère','كوثر':'Abondance',
+        'الكوثر':'L\'Abondance','قرآن':'Coran','ذكر':'Rappel',
       };
-
       const MEANINGS_AR = {
         'نور':'الضوء والنور الإلهي','رحمة':'العطف والرأفة الإلهية','صلاة':'العبادة والصلة بالله',
         'إيمان':'التصديق بالله وملائكته','جنة':'الفردوس دار النعيم','صبر':'التحمل والثبات',
@@ -392,19 +378,11 @@ async function doSearch(){
         'الفرقان':'ما يفرق بين الحق والباطل','الكوثر':'الخير الكثير ونهر في الجنة',
       };
 
-      renderResult({
-        ar:   raw,
-        ph:   PHONETICS[rawStripped] || PHONETICS[raw] || '',
-        mAr:  MEANINGS_AR[rawStripped] || MEANINGS_AR[raw] || '',
-        mFr:  MEANINGS_FR[rawStripped] || MEANINGS_FR[raw] || 'Voir traduction du verset',
-        sAr:  surah.name_arabic || '',
-        sFr:  `${surah.translated_name ? surah.translated_name.name : surah.name_simple} (${surahNum})`,
-        v:    verseNum,
-        aAr:  verse.text_uthmani || hit.text,
-        aFr:  translation,
-        gram: `Sourate n°${surahNum} · Verset ${verseNum}`,
-        audio:`ar.alafasy/${surahNum}${String(verseNum).padStart(3,'0')}`
-      });
+      const ph  = PHONETICS[rawStripped]  || PHONETICS[raw]  || '';
+      const mFr = MEANINGS_FR[rawStripped] || MEANINGS_FR[raw] || 'Voir traduction du verset';
+      const mAr = MEANINGS_AR[rawStripped] || MEANINGS_AR[raw] || '';
+
+      renderAllResults(raw, ph, mFr, mAr, results, total);
       return;
     }
 
@@ -414,6 +392,57 @@ async function doSearch(){
     console.log('Erreur:', e);
     document.getElementById('rarea').innerHTML=`<div class="empty"><div class="empty-ar">؟</div><div class="empty-tx">Erreur de connexion<br/>تحقق من اتصالك بالإنترنت</div></div>`;
   }
+}
+
+function renderAllResults(word, ph, mFr, mAr, results, total){
+  const area = document.getElementById('rarea');
+
+  // En-tête avec infos du mot
+  let html = `
+  <div class="rcard">
+    <div class="rtop">
+      <div class="rword">${word}</div>
+      <div class="rbadges">
+        <span class="rbadge">${total} occurrence${total>1?'s':''} dans le Coran</span>
+      </div>
+    </div>
+    <div class="rgrid">
+      ${ph?`<div class="rbox"><div class="rlbl">Prononciation</div><div class="rval ph">${ph}</div></div>`:''}
+      <div class="rbox"><div class="rlbl">Signification (fr)</div><div class="rval" style="font-size:12px">${mFr}</div></div>
+      ${mAr?`<div class="rbox" style="grid-column:1/-1"><div class="rlbl">المعنى بالعربية</div><div class="rval ar" style="font-size:13px">${mAr}</div></div>`:''}
+    </div>
+  </div>
+
+  <div style="font-size:11px;color:#aaa;text-align:center;margin:8px 0 12px;font-style:italic;">
+    ${results.length} versets affichés sur ${total} · ${total} آية
+  </div>`;
+
+  // Tous les versets
+  results.forEach((hit, i) => {
+    const [surahNum, verseNum] = hit.verse_key.split(':');
+    const audioUrl = `https://cdn.islamic.network/quran/audio/128/ar.alafasy/${surahNum}${String(verseNum).padStart(3,'0')}.mp3`;
+
+    html += `
+    <div class="rcard" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;direction:ltr;">
+        <span class="rbadge" style="font-size:11px;">Sourate ${surahNum} · Verset ${verseNum}</span>
+        <button onclick="playAudioV('${audioUrl}','abtn${i}')" style="background:var(--g);color:var(--gold);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;" id="abtn${i}">▶ écouter</button>
+      </div>
+      <div class="ayah">${hit.text}</div>
+    </div>`;
+  });
+
+  area.innerHTML = html;
+}
+
+function playAudioV(url, btnId){
+  if(curAudio && !curAudio.paused){ curAudio.pause(); curAudio=null; }
+  curAudio = new Audio(url);
+  const btn = document.getElementById(btnId);
+  curAudio.play().then(()=>{
+    if(btn) btn.textContent='⏸ pause';
+    curAudio.onended=()=>{ if(btn) btn.textContent='▶ écouter'; };
+  }).catch(()=>{ if(btn) btn.textContent='▶ écouter'; });
 }
 
 function renderResult(d){
